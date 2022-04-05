@@ -49,6 +49,8 @@ const pgpDefaultConfig = {
 
 interface GithubUsers {
   id: number;
+  login: string;
+  location: string;
 }
 
 const pgp = pgPromise(pgpDefaultConfig);
@@ -60,23 +62,30 @@ db.one(
     ({ exists }) =>
       !exists &&
       db.none(
-        "CREATE TABLE github_users (id BIGSERIAL, login TEXT UNIQUE, name TEXT, company TEXT)"
+        "CREATE TABLE github_users (id BIGSERIAL, login TEXT UNIQUE, name TEXT, company TEXT, location TEXT)"
       )
   )
   .then(() => {
-    return request({
-      uri: `https://api.github.com/users/${process.env.USER_NAME}`,
-      headers: {
-        "User-Agent": "Request-Promise",
-      },
-      json: true,
-    });
+    const location = process.env.LOCATION;
+    let query = `SELECT * FROM github_users`;
+    if (location) query += ` WHERE location = '${location}'`;
+    return db.many(query);
   })
-  .then((data: GithubUsers) =>
-    db.one(
-      "INSERT INTO github_users (login) VALUES ($[login]) RETURNING id",
-      data
-    )
-  )
-  .then(({ id }) => console.log(id))
+  .then(res => console.log("res", res))
+  // .then(() => {
+  //   return request({
+  //     uri: `https://api.github.com/users/${process.env.USER_NAME}`,
+  //     headers: {
+  //       "User-Agent": "Request-Promise",
+  //     },
+  //     json: true,
+  //   });
+  // })
+  // .then((data: GithubUsers) => {
+  //   return db.one(
+  //     "INSERT INTO github_users (login, location) VALUES ($[login],$[location]) RETURNING id",
+  //     data
+  //   );
+  // })
+  // .then(({ id }) => console.log(id))
   .then(() => process.exit(0));
