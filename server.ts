@@ -60,7 +60,7 @@ db.one(
     ({ exists }) =>
       !exists &&
       db.none(
-        "CREATE TABLE github_users (id BIGSERIAL, login TEXT, name TEXT, company TEXT)"
+        "CREATE TABLE github_users (id BIGSERIAL, login TEXT UNIQUE, name TEXT, company TEXT)"
       )
   )
   .then(() => {
