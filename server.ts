@@ -122,10 +122,8 @@ const getUsers = (filter: string) => {
 };
 
 const getAndCreateUser = (userName: string) =>
-  getUsers(userName)
-    .then(res => {
-      return res;
-    })
+  getUsers(`login:${userName}`)
+    .then(res => res)
     .catch(() =>
       getGithubUser(userName).then((data: GithubUsers) => createUser(data))
     );
@@ -157,7 +155,7 @@ const likeLanguage = (userName: string, language: string) =>
 
 const getUserLanguages = (userName: string) =>
   db.many(
-    `SELECT languages.name FROM user_languages JOIN github_users ON github_users.id = user_languages.user_id JOIN languages ON languages.id = user_languages.language_id WHERE github_users.login = '${userName}'`
+    `SELECT github_users.login as user, languages.name FROM user_languages JOIN github_users ON github_users.id = user_languages.user_id JOIN languages ON languages.id = user_languages.language_id WHERE github_users.login = '${userName}'`
   );
 
 findOrCreateTable(
@@ -179,7 +177,7 @@ findOrCreateTable(
       ? getUserLanguages(USER_NAME)
       : getUsers(FILTERS);
   })
-  .then(res => console.log("res", res))
+  .then(res => console.log("res => ", res))
   .then(() => process.exit(0))
   .catch(error => {
     console.error(error);
