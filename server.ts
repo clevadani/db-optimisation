@@ -5,25 +5,20 @@ const request = require("request-promise");
 // Limit the amount of debugging of SQL expressions
 const trimLogsSize: number = 200;
 
-// Database interface
+// db interface
 interface DBOptions {
   host: string;
-  database: string;
+  db: string;
   user?: string;
   password?: string;
   port?: number;
 }
 
-// Actual database options
+// Actual db options
 const options: DBOptions = {
   host: "localhost",
-  database: "lovelystay_test",
+  db: "lovelystay_test",
 };
-
-console.info(
-  "Connecting to the database:",
-  `${options.user}@${options.host}:${options.port}/${options.database}`
-);
 
 const pgpDefaultConfig = {
   promiseLib: require("bluebird"),
@@ -43,7 +38,7 @@ const pgpDefaultConfig = {
   },
   connect(client) {
     const cp = client.connectionParameters;
-    console.log("Connected to database:", cp.database);
+    console.log("Connected to db:", cp.db);
   },
 };
 
@@ -52,18 +47,29 @@ interface GithubUsers {
   login: string;
   location: string;
 }
+interface LanguageI {
+  id: number;
+  name: string;
+}
+interface LikeI {
+  user_id: number;
+  language_id: number;
+}
 
 const pgp = pgPromise(pgpDefaultConfig);
 const db = pgp(options);
 
-const checkIfTableExists = database =>
-  database.one(
-    "SELECT EXISTS ( SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename  = 'github_users' )"
+const checkIfTableExists = (tablename: string) =>
+  db.one(
+    `SELECT EXISTS ( SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename  = '${tablename}' )`
   );
 
-const createTable = database =>
-  database.none(
-    "CREATE TABLE github_users (id BIGSERIAL, login TEXT UNIQUE, name TEXT, company TEXT, location TEXT)"
+const createTable = (query: string) => db.none(query);
+
+const findOrCreateTable = (tablename: string, fields: string) =>
+  checkIfTableExists(tablename).then(
+    ({ exists }) =>
+      !exists && createTable(`CREATE TABLE ${tablename} ${fields}`)
   );
 
 const getGithubUser = (userName: string) =>
@@ -75,27 +81,91 @@ const getGithubUser = (userName: string) =>
     json: true,
   });
 
-const createUser = (database, data: GithubUsers) =>
-  database.one(
+const createUser = (data: GithubUsers) =>
+  db.one(
     "INSERT INTO github_users (login, location) VALUES ($[login],$[location]) RETURNING id",
     data
   );
 
-const getAndCreateUser = (database, userName: string) =>
-  getGithubUser(userName)
-    .then((data: GithubUsers) => createUser(database, data))
-    .then(({ id }) => console.log(id));
+const getLanguage = (name: string) =>
+  db.one(`SELECT * FROM languages WHERE name = '${name}'`);
 
-const getLisbonUsers = database =>
-  database.many(`SELECT * FROM github_users WHERE location = 'lisbon'`);
+const createLanguage = (name: string) =>
+  db.one("INSERT INTO languages (name) VALUES ($[name]) RETURNING id, name", {
+    name,
+  });
 
-checkIfTableExists(db)
-  .then(({ exists }) => !exists && createTable(db))
+const getOrCreateLanguage = (language: string) =>
+  getLanguage(language)
+    .then(data => data)
+    .catch(() => createLanguage(language));
+
+const getUsers = (userName: string) => {
+  let query = `SELECT * FROM github_users`;
+  if (userName) query += ` WHERE login = '${userName}'`;
+  return db.many(query);
+};
+
+const getAndCreateUser = (userName: string) =>
+  getUsers(userName).catch(
+    getGithubUser(userName).then((data: GithubUsers) => createUser(data))
+  );
+
+const alreadyLiked = (data: LikeI) =>
+  db.one(
+    `SELECT * FROM user_languages WHERE user_id = '${data.user_id}' AND  language_id = '${data.language_id}'`
+  );
+
+const like = (data: LikeI) =>
+  alreadyLiked(data).catch(() =>
+    db.one(
+      "INSERT INTO user_languages (user_id, language_id) VALUES ($[user_id],$[language_id]) RETURNING user_id, language_id",
+      data
+    )
+  );
+
+const likeLanguage = (userName: string, language: string) =>
+  getAndCreateUser(userName).then(({ id }) =>
+    getOrCreateLanguage(language).then(res =>
+      like({ user_id: id, language_id: res.id })
+    )
+  );
+
+const getUserLanguages = (userName: string) =>
+  db.many(
+    `SELECT languages.name FROM user_languages JOIN github_users ON github_users.id = user_languages.user_id JOIN languages ON languages.id = user_languages.language_id WHERE github_users.login = '${userName}'`
+  );
+
+findOrCreateTable(
+  "github_users",
+  "(id BIGSERIAL PRIMARY KEY, login TEXT UNIQUE, name TEXT, company TEXT, location TEXT)"
+)
   .then(() => {
-    const userName: string = process.env.USER_NAME;
-    const shouldGetOrCreate = userName ? getAndCreateUser : getLisbonUsers;
-    return shouldGetOrCreate(db, userName);
+    return findOrCreateTable(
+      "languages",
+      "(id BIGSERIAL PRIMARY KEY, name TEXT UNIQUE)"
+    );
   })
-  .then(data => console.log(data))
+  // .then(() => getOrCreateLanguage(process.env.LANGUAGE))
+  .then(() => {
+    const { USER_NAME, LANGUAGE, FILTERS } = process.env;
+    const execute = getUsers;
+
+    // return execute(process.env);
+    return USER_NAME && LANGUAGE
+      ? likeLanguage(USER_NAME, LANGUAGE)
+      : getUsers("");
+  })
+  // .then(() =>
+  //   findOrCreateTable(
+  //     "user_languages",
+  //     "(user_id int REFERENCES github_users (id) ON UPDATE CASCADE ON DELETE CASCADE,language_id int REFERENCES languages (id) ON UPDATE CASCADE ON DELETE CASCADE)"
+  //   )
+  // )
+  // .then(() => getUserLanguages(process.env.USER_NAME))
+  .then(res => console.log("res", res))
   .then(() => process.exit(0))
-  .catch(error => console.error(error));
+  .catch(error => {
+    console.error(error);
+    process.exit(0);
+  });
