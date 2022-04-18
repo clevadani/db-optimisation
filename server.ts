@@ -56,6 +56,21 @@ interface LikeI {
   language_id: number;
 }
 
+const mapFilters = (str: string) => {
+  const strArr = str.split(",");
+  let query = "";
+  const length = strArr.length;
+  if (length) query = " WHERE";
+  for (let i = 0; i < length; i++) {
+    const [key, value] = strArr[i].split(":");
+    if (key && value) {
+      if (i > 0) query += " AND ";
+      query += ` ${key} = '${value}'`;
+    }
+  }
+  return query;
+};
+
 const pgp = pgPromise(pgpDefaultConfig);
 const db = pgp(options);
 
@@ -100,16 +115,20 @@ const getOrCreateLanguage = (language: string) =>
     .then(data => data)
     .catch(() => createLanguage(language));
 
-const getUsers = (userName: string) => {
+const getUsers = (filter: string) => {
   let query = `SELECT * FROM github_users`;
-  if (userName) query += ` WHERE login = '${userName}'`;
-  return db.many(query);
+  if (filter?.length) query += mapFilters(filter);
+  return db.any(query);
 };
 
 const getAndCreateUser = (userName: string) =>
-  getUsers(userName).catch(
-    getGithubUser(userName).then((data: GithubUsers) => createUser(data))
-  );
+  getUsers(userName)
+    .then(res => {
+      return res;
+    })
+    .catch(() =>
+      getGithubUser(userName).then((data: GithubUsers) => createUser(data))
+    );
 
 const alreadyLiked = (data: LikeI) =>
   db.one(
@@ -125,9 +144,14 @@ const like = (data: LikeI) =>
   );
 
 const likeLanguage = (userName: string, language: string) =>
-  getAndCreateUser(userName).then(({ id }) =>
-    getOrCreateLanguage(language).then(res =>
-      like({ user_id: id, language_id: res.id })
+  findOrCreateTable(
+    "user_languages",
+    "(user_id int REFERENCES github_users (id) ON UPDATE CASCADE ON DELETE CASCADE,language_id int REFERENCES languages (id) ON UPDATE CASCADE ON DELETE CASCADE)"
+  ).then(() =>
+    getAndCreateUser(userName).then(users =>
+      getOrCreateLanguage(language).then(res =>
+        like({ user_id: users[0].id, language_id: res.id })
+      )
     )
   );
 
@@ -146,23 +170,15 @@ findOrCreateTable(
       "(id BIGSERIAL PRIMARY KEY, name TEXT UNIQUE)"
     );
   })
-  // .then(() => getOrCreateLanguage(process.env.LANGUAGE))
   .then(() => {
     const { USER_NAME, LANGUAGE, FILTERS } = process.env;
-    const execute = getUsers;
 
-    // return execute(process.env);
     return USER_NAME && LANGUAGE
       ? likeLanguage(USER_NAME, LANGUAGE)
-      : getUsers("");
+      : USER_NAME
+      ? getUserLanguages(USER_NAME)
+      : getUsers(FILTERS);
   })
-  // .then(() =>
-  //   findOrCreateTable(
-  //     "user_languages",
-  //     "(user_id int REFERENCES github_users (id) ON UPDATE CASCADE ON DELETE CASCADE,language_id int REFERENCES languages (id) ON UPDATE CASCADE ON DELETE CASCADE)"
-  //   )
-  // )
-  // .then(() => getUserLanguages(process.env.USER_NAME))
   .then(res => console.log("res", res))
   .then(() => process.exit(0))
   .catch(error => {
